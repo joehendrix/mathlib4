@@ -38,8 +38,11 @@ def replaceVertex : SimpleGraph V where
 /-- There is never an `s-t` edge in `G.replaceVertex s t`. -/
 lemma not_adj_replaceVertex_same : ¬(G.replaceVertex s t).Adj s t := by simp [replaceVertex]
 
-@[simp] lemma replaceVertex_self : G.replaceVertex s s = G := by
-  ext; unfold replaceVertex; aesop (add simp or_iff_not_imp_left)
+@[simp]
+lemma replaceVertex_self : G.replaceVertex s s = G := by
+  ext x y
+  unfold replaceVertex
+  by_cases g : x = s <;> by_cases h : y = s <;> simp [g, h]
 
 variable {t}
 

@@ -472,7 +472,9 @@ theorem mem_equivPair_tail_iff {i j : ι} {w : Word M} (m : M i) :
     · subst k
       by_cases hij : j = i <;> simp_all
     · by_cases hik : i = k
-      · subst i; simp_all [eq_comm, and_comm, or_comm]
+      · subst i
+        have p : ¬(k = j) := h ∘ Eq.symm
+        simp [h, p, @eq_comm _ m g, @or_comm (g = m)]
       · simp [hik, Ne.symm hik]
 
 theorem mem_of_mem_equivPair_tail {i j : ι} {w : Word M} (m : M i) :
@@ -563,8 +565,10 @@ theorem mem_smul_iff {i j : ι} {m₁ : M i} {m₂ : M j} {w : Word M} :
         cases w.toList
         · simp
         · simp (config := {contextual := true}) [Sigma.ext_iff]
-  · rcases w with ⟨_ | _, _, _⟩ <;>
-    simp [or_comm, hij, Ne.symm hij, eq_comm]
+  · rcases w with ⟨_ | prod, _, _, _⟩
+    · simp [hij, Ne.symm hij]
+    · simp [hij, Ne.symm hij, @eq_comm _ prod]
+    · simp [hij, Ne.symm hij, @eq_comm _ prod, or_comm]
 
 theorem mem_smul_iff_of_ne {i j : ι} (hij : i ≠ j) {m₁ : M i} {m₂ : M j} {w : Word M} :
     ⟨_, m₁⟩ ∈ (of m₂ • w).toList ↔ ⟨i, m₁⟩ ∈ w.toList := by

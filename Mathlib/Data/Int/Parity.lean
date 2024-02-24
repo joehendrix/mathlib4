@@ -198,11 +198,11 @@ theorem odd_sub' : Odd (m - n) ↔ (Odd n ↔ Even m) := by
 #align int.odd_sub' Int.odd_sub'
 
 theorem even_mul_succ_self (n : ℤ) : Even (n * (n + 1)) := by
-  simpa [even_mul, parity_simps] using n.even_or_odd
+  simp [even_mul, parity_simps]
 #align int.even_mul_succ_self Int.even_mul_succ_self
 
 theorem even_mul_pred_self (n : ℤ) : Even (n * (n - 1)) := by
-  simpa [even_mul, parity_simps] using n.even_or_odd
+  simp [even_mul, parity_simps]
 
 @[simp, norm_cast]
 theorem even_coe_nat (n : ℕ) : Even (n : ℤ) ↔ Even n := by

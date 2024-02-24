@@ -73,7 +73,7 @@ lemma logTaylor_succ (n : ℕ) :
 lemma logTaylor_at_zero (n : ℕ) : logTaylor n 0 = 0 := by
   induction n with
   | zero => simp [logTaylor_zero]
-  | succ n ih => simpa [logTaylor_succ, ih] using ne_or_eq n 0
+  | succ n ih => simp [logTaylor_succ, ih]
 
 lemma hasDerivAt_logTaylor (n : ℕ) (z : ℂ) :
     HasDerivAt (logTaylor (n + 1)) (∑ j in Finset.range n, (-1) ^ j * z ^ j) z := by

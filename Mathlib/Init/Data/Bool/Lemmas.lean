@@ -161,15 +161,4 @@ theorem coe_xor_iff (a b : Bool) : xor a b ↔ Xor' (a = true) (b = true) := by
   cases a <;> cases b <;> exact by decide
 #align bxor_coe_iff Bool.coe_xor_iff
 
-@[simp]
-theorem ite_eq_true_distrib (c : Prop) [Decidable c] (a b : Bool) :
-    ((if c then a else b) = true) = if c then a = true else b = true := by by_cases c <;> simp [*]
-#align ite_eq_tt_distrib Bool.ite_eq_true_distrib
-
-@[simp]
-theorem ite_eq_false_distrib (c : Prop) [Decidable c] (a b : Bool) :
-    ((if c then a else b) = false) = if c then a = false else b = false := by
-  by_cases c <;> simp [*]
-#align ite_eq_ff_distrib Bool.ite_eq_false_distrib
-
 end Bool

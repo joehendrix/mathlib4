@@ -49,20 +49,6 @@ theorem of_decide_iff {p : Prop} [Decidable p] : decide p ↔ p :=
 #align bool.tt_eq_to_bool_iff true_eq_decide_iff
 #align bool.ff_eq_to_bool_iff false_eq_decide_iff
 
-theorem decide_not (p : Prop) [Decidable p] : (decide ¬p) = !(decide p) := by
-  by_cases p <;> simp [*]
-#align bool.to_bool_not Bool.decide_not
-
-@[simp]
-theorem decide_and (p q : Prop) [Decidable p] [Decidable q] : decide (p ∧ q) = (p && q) := by
-  by_cases p <;> by_cases q <;> simp [*]
-#align bool.to_bool_and Bool.decide_and
-
-@[simp]
-theorem decide_or (p q : Prop) [Decidable p] [Decidable q] : decide (p ∨ q) = (p || q) := by
-  by_cases p <;> by_cases q <;> simp [*]
-#align bool.to_bool_or Bool.decide_or
-
 #align bool.to_bool_eq decide_eq_decide
 
 theorem not_false' : ¬false := fun.
@@ -125,20 +111,9 @@ theorem cond_eq_ite {α} (b : Bool) (t e : α) : cond b t e = if b then t else e
   cases b <;> simp
 #align bool.cond_eq_ite Bool.cond_eq_ite
 
-@[simp]
-theorem cond_decide {α} (p : Prop) [Decidable p] (t e : α) :
-    cond (decide p) t e = if p then t else e := by
-  by_cases p <;> simp [*]
-#align bool.cond_to_bool Bool.cond_decide
-
-@[simp]
-theorem cond_not {α} (b : Bool) (t e : α) : cond (!b) t e = cond b e t := by cases b <;> rfl
-#align bool.cond_bnot Bool.cond_not
-
 theorem not_ne_id : not ≠ id := fun h ↦ false_ne_true <| congrFun h true
 #align bool.bnot_ne_id Bool.not_ne_id
 
-theorem coe_iff_coe : ∀ {a b : Bool}, (a ↔ b) ↔ a = b := by decide
 #align bool.coe_bool_iff Bool.coe_iff_coe
 
 theorem eq_true_of_ne_false : ∀ {a : Bool}, a ≠ false → a = true := by decide
@@ -183,16 +158,9 @@ lemma eq_not_iff : ∀ {a b : Bool}, a = !b ↔ a ≠ b := by decide
 lemma not_eq_iff : ∀ {a b : Bool}, !a = b ↔ a ≠ b := by decide
 #align bool.bnot_eq_iff Bool.not_eq_iff
 
--- Porting note: this is a case where our naming scheme is less than ideal.
--- The two `not`s in this name are different.
--- For now we're going with consistency at the expense of ambiguity.
-@[simp]
-theorem not_eq_not : ∀ {a b : Bool}, ¬a = !b ↔ a = b := by decide
 #align bool.not_eq_bnot Bool.not_eq_not
 
 -- Porting note: and here again.
-@[simp]
-theorem not_not_eq : ∀ {a b : Bool}, ¬(!a) = b ↔ a = b := by decide
 #align bool.bnot_not_eq Bool.not_not_eq
 
 theorem ne_not {a b : Bool} : a ≠ !b ↔ a = b :=
@@ -232,7 +200,6 @@ theorem bne_eq_xor : bne = xor := by funext a b; revert a b; decide
 
 #align bool.bxor_comm Bool.xor_comm
 
-attribute [simp] xor_assoc
 #align bool.bxor_assoc Bool.xor_assoc
 
 #align bool.bxor_left_comm Bool.xor_left_comm
