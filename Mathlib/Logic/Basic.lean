@@ -423,8 +423,7 @@ theorem imp_or {a b c : Prop} : a → b ∨ c ↔ (a → b) ∨ (a → c) := Dec
 theorem imp_or' : a → b ∨ c ↔ (a → b) ∨ (a → c) := Decidable.imp_or'
 #align imp_or_distrib' imp_or'ₓ -- universes
 
-theorem not_imp : ¬(a → b) ↔ a ∧ ¬b := Decidable.not_imp_iff_and_not
-#align not_imp not_imp
+#align not_imp Classical.not_imp
 
 theorem peirce (a b : Prop) : ((a → b) → a) → a := Decidable.peirce _ _
 #align peirce peirce
