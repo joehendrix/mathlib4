@@ -29,11 +29,6 @@ theorem decide_False {h} : @decide False h = false :=
   decide_eq_false id
 #align bool.to_bool_false Bool.decide_False
 
-@[simp]
-theorem decide_coe (b : Bool) {h} : @decide b h = b := by
-  cases b
-  · exact decide_eq_false <| λ j => by cases j
-  · exact decide_eq_true <| rfl
 #align bool.to_bool_coe Bool.decide_coe
 
 theorem coe_decide (p : Prop) [d : Decidable p] : decide p ↔ p :=
@@ -72,9 +67,6 @@ theorem beq_eq_decide_eq {α} [BEq α] [LawfulBEq α] [DecidableEq α]
 theorem beq_comm {α} [BEq α] [LawfulBEq α] {a b : α} : (a == b) = (b == a) :=
   eq_iff_eq_true_iff.2 (by simp [@eq_comm α])
 
-@[simp]
-theorem default_bool : default = false :=
-  rfl
 #align bool.default_bool Bool.default_bool
 
 theorem dichotomy (b : Bool) : b = false ∨ b = true := by cases b <;> simp
@@ -106,10 +98,6 @@ instance decidableForallBool {p : Bool → Prop} [∀ b, Decidable (p b)] : Deci
 instance decidableExistsBool {p : Bool → Prop} [∀ b, Decidable (p b)] : Decidable (∃ b, p b) :=
   decidable_of_decidable_of_iff exists_bool.symm
 #align bool.decidable_exists_bool Bool.decidableExistsBool
-
-theorem cond_eq_ite {α} (b : Bool) (t e : α) : cond b t e = if b then t else e := by
-  cases b <;> simp
-#align bool.cond_eq_ite Bool.cond_eq_ite
 
 theorem not_ne_id : not ≠ id := fun h ↦ false_ne_true <| congrFun h true
 #align bool.bnot_ne_id Bool.not_ne_id

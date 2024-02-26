@@ -162,8 +162,6 @@ instance : IsTrans Prop Iff := ⟨fun _ _ _ ↦ Iff.trans⟩
 alias Iff.imp := imp_congr
 #align iff.imp Iff.imp
 
-@[simp] theorem eq_true_eq_id : Eq True = id := by
-  funext _; simp only [true_iff, id.def, eq_iff_iff]
 #align eq_true_eq_id eq_true_eq_id
 
 #align imp_and_distrib imp_and
@@ -235,8 +233,6 @@ classical ones, as these may cause instance mismatch errors later.
 -/
 
 export Classical (not_not)
-attribute [simp] not_not
-#align not_not Classical.not_not
 
 theorem of_not_not : ¬¬a → a := by_contra
 #align of_not_not of_not_not
@@ -256,7 +252,6 @@ theorem Not.imp_symm : (¬a → b) → ¬b → a := Not.decidable_imp_symm
 theorem not_imp_comm : ¬a → b ↔ ¬b → a := Decidable.not_imp_comm
 #align not_imp_comm not_imp_comm
 
-@[simp] theorem not_imp_self : ¬a → a ↔ a := Decidable.not_imp_self
 #align not_imp_self not_imp_self
 
 theorem Imp.swap : a → b → c ↔ b → a → c := ⟨Function.swap, Function.swap⟩
@@ -384,10 +379,6 @@ theorem imp_iff_or_not : b → a ↔ a ∨ ¬b := Decidable.imp_iff_or_not
 
 theorem not_imp_not : ¬a → ¬b ↔ b → a := Decidable.not_imp_not
 #align not_imp_not not_imp_not
-
-@[simp]
-theorem imp_and_neg_imp_iff (p q : Prop) : (p → q) ∧ (¬p → q) ↔ q := by
-  rw [imp_iff_or_not, imp_iff_or_not, not_not, ← or_and_left, not_and_self_iff, or_false_iff]
 
 /-- Provide the reverse of modus tollens (`mt`) as dot notation for implications. -/
 protected theorem Function.mtr : (¬a → ¬b) → b → a := not_imp_not.mp
@@ -532,9 +523,6 @@ alias Ne.trans_eq := ne_of_ne_of_eq
 theorem eq_equivalence : Equivalence (@Eq α) :=
   ⟨Eq.refl, @Eq.symm _, @Eq.trans _⟩
 #align eq_equivalence eq_equivalence
-
--- These were migrated to Std but the `@[simp]` attributes were (mysteriously?) removed.
-attribute [simp] eq_mp_eq_cast eq_mpr_eq_cast
 
 #align eq_mp_eq_cast eq_mp_eq_cast
 #align eq_mpr_eq_cast eq_mpr_eq_cast
@@ -1264,16 +1252,9 @@ theorem dite_prop_iff_and {Q : P → Prop} {R : ¬P → Prop} [Decidable P] :
     dite P Q R ↔ (∀ h, Q h) ∧ (∀ h, R h) := by
   by_cases h : P <;> simp [h, forall_prop_of_false, forall_prop_of_true]
 
-@[simp] lemma if_true_right : (if P then Q else True) ↔ ¬P ∨ Q := by by_cases P <;> simp [*]
 #align if_true_right_eq_or if_true_right
-
-@[simp] lemma if_true_left : (if P then True else Q) ↔ P ∨ Q := by by_cases P <;> simp [*]
 #align if_true_left_eq_or if_true_left
-
-@[simp] lemma if_false_right : (if P then Q else False) ↔ P ∧ Q := by by_cases P <;> simp [*]
 #align if_false_right_eq_and if_false_right
-
-@[simp] lemma if_false_left : (if P then False else Q) ↔ ¬P ∧ Q := by by_cases P <;> simp [*]
 #align if_false_left_eq_and if_false_left
 
 end ite

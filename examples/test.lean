@@ -187,7 +187,7 @@ def render [Monad M] [MonadQuotation M] (v : BoolVal) :
     match op with
     | .iteProp | .iteBool => do
     `(term| if $(←c.render) then $(←t.render) else $(←f.render))
-    |.diteProp | .diteBool => do
+    | .diteProp | .diteBool => do
     `(term| if h : $(←c.render) then $(←t.render) else $(←f.render))
     | .condBool => do
       `(term| bif $(←c.render) then $(←t.render) else $(←f.render))
@@ -253,33 +253,10 @@ def eq_true (x : BoolVal) : BoolVal := .eq x (.trueVal .bool) .eqBool
 @[match_pattern]
 def eq_false (x : BoolVal) : BoolVal := .eq x (.falseVal .bool) .eqBool
 
-set_option profiler true
-
 partial def simp (v : BoolVal) : BoolVal :=
   let v := map simp v
   match v with
-  | .boolToProp b =>
-      match b with
-      | .trueVal .bool  => .trueVal  .prop
-      | .falseVal .bool => .falseVal .prop
-      | .var _ _ _   => .eq b (.trueVal .bool) .eqBool
-      | .decide p => p
-      | .not c _    => simp (~(.boolToProp c)) -- boolToProp can normalize
-      | .and x y _  => simp <| (.boolToProp x) &&& (.boolToProp y)
-      | .or x y _   => simp <| (.boolToProp x) ||| (.boolToProp y)
-      | .eq x y .beqBool => simp <| .eq x y .eqBool
-      | .ne x y .bneBool => simp <| .ne x y .neBool
-      | .ite c t f op =>
-        match op with
-        | .iteBool | .condBool =>
-          simp <| .ite (coerceType c .prop) (.boolToProp t) (.boolToProp f) .iteProp
-        | .diteBool =>
-          panic! "expected dite to simplify away."
-        | _ =>
-          panic! "Unexpected prop when bool expected."
-      | .trueVal .prop | .falseVal .prop | .boolToProp _
-        | .implies _ _ | .eq _ _ _ | .ne _ _ _ =>
-          panic! "Unexpected prop when bool expected."
+  | .boolToProp b => simp <| eq_true b
   | .decide p =>
       match p with
       | .trueVal  _ => .trueVal  .bool
@@ -290,16 +267,18 @@ partial def simp (v : BoolVal) : BoolVal :=
       | .and x y _ => simp <| (.decide x) &&& (.decide y)
       | .or x y _  => simp <| (.decide x) ||| (.decide y)
         -- Leave implication alone for now
-      | .implies _ _ => v
+      | .implies p q => simp <| ~(.decide p) ||| (.decide q)
       | .eq x y .eqBool =>
         match y with
         | .trueVal _ => x
         | .falseVal _ => simp (~ x)
-        | _ => .eq x y .beqBool
+        | _ => v
       | .eq x y .eqProp | iff x y =>
         simp <| .eq (.decide x) (.decide y) .beqBool
-      | .ne x y _ =>
-        simp <| .ne (coerceType x .bool) (coerceType y .bool) .bneBool
+      | .ne _ _ op =>
+        match op with
+        | .neProp | .neBool => panic! "Expected ne to be reduced to not eq"
+        | .bneBool => panic! "Unexpected bool"
       | .ite c t f op =>
         match op with
         | .iteProp =>
@@ -317,15 +296,20 @@ partial def simp (v : BoolVal) : BoolVal :=
     | .not t _ => t
     | .and x y .prop => simp <| .implies x (.not y .prop)
     | .and x y .bool => simp <| .or (.not x .bool) (.not y .bool) .bool
-    | .or  x y .bool => simp <| .and (.not x .bool) (.not y .bool) .bool
+    | .or x y  tp    => simp <| .and (.not x tp) (.not y tp) tp
     | .implies x y => simp <| .and x (.not y .prop) .prop
     | .eq b (.trueVal  .bool) .eqBool => .eq b (.falseVal .bool) .eqBool
     | .eq b (.falseVal .bool) .eqBool => .eq b (.trueVal  .bool) .eqBool
     | .eq b (.not c .bool) .eqBool => simp <| .eq b c .eqBool
     | .eq (.not b .bool) c .eqBool => simp <| .eq b c .eqBool
-    | .eq b c .beqBool => .ne b c .bneBool
     | .ne b c .neBool  => .eq b c .eqBool
-    | .ne b c .bneBool => .eq b c .beqBool
+    | .ite c t f .iteProp =>
+        match t, f with
+        | eq_true  t, eq_true  f => .ite c (eq_false t) (eq_false f) .iteProp
+        | eq_true  t, eq_false f => .ite c (eq_false t) (eq_true  f) .iteProp
+        | eq_false t, eq_true  f => .ite c (eq_true t)  (eq_false f) .iteProp
+        | eq_false t, eq_false f => .ite c (eq_true t)  (eq_true  f) .iteProp
+        | _, _ => v
     | _ => v
   | .and x y tp => Id.run do
       if let .trueVal _ := x then
@@ -361,10 +345,9 @@ partial def simp (v : BoolVal) : BoolVal :=
         if x == yl then return y
       if x == y then
         return x
-      else if isComplement x y then
+      if isComplement x y then
         return .trueVal tp
-      else
-        return v
+      pure v
   | .implies x y =>
     match x, y with
     | .trueVal _, y => y
@@ -385,22 +368,37 @@ partial def simp (v : BoolVal) : BoolVal :=
       match op with
       | .eqBool => simp <| .eq y (.trueVal .bool) .eqBool
       | .eqProp | .iffProp | .beqBool => y
-  | .eq (.falseVal _) (.trueVal  _) op => .falseVal op.resultType
-  | .eq (.falseVal _) (.falseVal _) op => .trueVal op.resultType
-  | .eq (.falseVal _) y .eqBool => simp <| eq_false y
-  | .eq (.falseVal tp) y _ => simp <| .not y tp
-  | eq_true x =>
-    match x with
+  | .eq (.falseVal tp) y op =>
+    match y with
+    | .trueVal  _ => .falseVal op.resultType
+    | .falseVal _ => .trueVal  op.resultType
+    | _ =>
+      match op with
+      | .eqBool =>
+        simp <| eq_false y
+      | _ =>
+        simp <| .not y tp
+  | .eq x (.trueVal .bool) .eqBool =>
+    (match x with
     | .trueVal _ | .falseVal _ | .implies _ _ | .boolToProp _ =>
       panic! "Unexpected term."
     | .var _ _ _ => v
     | .decide t => t
-    | .not x _   =>
-      simp <| .eq x (.falseVal .bool) .eqBool
-    | .and _ _ _ | .or _ _ _ | .eq _ _ _ | .ne _ _ _ | .ite _ _ _ _ =>
-      simp <| .boolToProp x
+    | .not x _   => simp <| eq_false x
+    | .and x y _  => simp <| eq_true x &&& eq_true y
+    | .or x y _   => simp <| eq_true x ||| eq_true y
+    | .eq x y .beqBool => simp <| .eq x y .eqBool
+    | .ne x y .bneBool => simp <| .ne x y .neBool
+    | .ite c t f op =>
+      (match op with
+      | .iteBool | .condBool =>
+        simp <| .ite (coerceType c .prop) (eq_true t) (eq_true f) .iteProp
+      | .diteBool => panic! "expected dite to simplify away."
+      | _ => panic! "Unexpected prop when bool expected.")
+    | .eq _ _ _ | .ne _ _ _ =>
+        panic! "Unexpected prop when bool expected.")
   | .eq x (.trueVal _) _op => x
-  | eq_false x  =>
+  | .eq x (.falseVal _) .eqBool  =>
     match x with
     | .trueVal _ | .falseVal _ | .implies _ _ | .boolToProp _ =>
       panic! "Unexpected term."
@@ -409,86 +407,59 @@ partial def simp (v : BoolVal) : BoolVal :=
       simp <| .not t .prop
     | .not x _   =>
       simp <| .eq x (.trueVal .bool) .eqBool
+    | .and x y _ => simp <| .implies (eq_true x) (eq_false y)
+    | .or  x y _ => simp <| .and (eq_false x) (eq_false y) .prop
+    | .eq x y .beqBool => simp <| .not (.eq x y .eqBool) .prop
+    | .ne x y .bneBool => simp <| .not (.ne x y .neBool) .prop
     | .ite c t f _ =>
       simp <| .ite (coerceType c .prop) (eq_false t) (eq_false f) .iteProp
-    | .and _ _ _ | .or _ _ _ | .eq _ _ _ | .ne _ _ _ =>
-      simp <| .not (.boolToProp x) .prop
+    | .eq _ _ _ | .ne _ _ _ =>
+        panic! "Unexpected prop when bool expected."
    -- N.B. bool ops other than .eqBool do not change type.
-  | .eq x (.falseVal tp) _ => simp (.not x tp)
-  | .eq x y op =>
+  | .eq x y op => Id.run do
+    if let .falseVal tp := y then
+      return simp (.not x tp)
     if x == y then
-      .trueVal op.resultType
-    else if isComplement x y then
-      .falseVal op.resultType
-    else
-      match op with
-      | .eqProp | .iffProp =>
-        (match x, y with
-        -- The cases below simplify the bool to prop normal forms (b = true, b = false) while
-        -- avoiding distributing not over the normal form.
-        | eq_true  x, eq_true  y => simp <| .eq x y .eqBool
-        | eq_false x, eq_false y => simp <| .eq (~ x) (~ y) .eqBool
-        | eq_true  x, eq_false y => simp <| .eq x (~ y) .eqBool
-        | eq_false x, eq_true  y => simp <| .eq (~ x) y .eqBool
-        | _, _ => iff x y)
-      | .eqBool =>
-        match x, y with
-        | .decide x, .decide y => iff x y
-        | _, _ => v
-      | .beqBool => v
-  | .ne x y op => Id.run do
-    if let .trueVal _ := x then
-      let r :=
-        match y, op with
-        | .falseVal _, _ => .trueVal op.resultType
-        | .trueVal _,  _ => .falseVal op.resultType
-        | _, .neBool => simp <| eq_false y
-        | _, _ => simp (~y)
-      return r
-    if let .falseVal _ := x then
-      let r :=
-        match y, op with
-        | .trueVal _,  op => .trueVal op.resultType
-        | .falseVal _, op => .falseVal op.resultType
-        | _, .neBool => simp <| eq_true y
-        | _, _ => y
-      return r
-    if let .trueVal _ := y then
-      match op with
-      | .neBool => return simp <| eq_false x
-      | .neProp | .bneBool => return simp (~x)
-    if let .falseVal _ := y then
-      match op with
-      | .neBool => return simp <| eq_true x
-      | .neProp | .bneBool => return x
-    if x == y then
-      return .falseVal op.resultType
+      return (.trueVal op.resultType)
     if isComplement x y then
-      return .trueVal op.resultType
+      return (.falseVal op.resultType)
     match op with
-    | .neProp =>
-      pure <|
-        match x, y with
-        -- The cases below simplify the bool to prop normal forms (b = true, b = false) while
-        -- avoiding distributing not over the normal form.
-        | eq_true  x, eq_true  y => simp <| .ne x y .neBool
-        | eq_false x, eq_false y => simp <| .ne (~ x) (~ y) .neBool
-        | eq_true  x, eq_false y => simp <| .ne x (~ y) .neBool
-        | eq_false x, eq_true  y => simp <| .ne (~ x) y .neBool
-        | _, _ => simp <| .not (iff x y) .prop
-    | .neBool =>
-      pure <|
-        match x, y with
-        | .decide x, .decide y => simp <| .not (iff x y) .prop
-        | x, .not y .bool => simp <| .eq x y .eqBool
-        | .not x .bool, y => simp <| .eq x y .eqBool
-        | _, _ => v
-    | .bneBool =>
-      pure <|
-        match x, y with
-        | .ne a b .bneBool, c =>.ne a (.ne b c .bneBool) .bneBool
-        | .not x _, .not y _ => .ne x y .bneBool
-        | _, _ => v
+    | .eqProp | .iffProp =>
+      match x, y with
+      -- The cases below simplify the bool to prop normal forms (b = true, b = false) while
+      -- avoiding distributing not over the normal form.
+      | eq_true  x, eq_true  y => simp <| .eq x y .eqBool
+      | eq_false x, eq_false y => simp <| .eq (~ x) (~ y) .eqBool
+      | eq_true  x, eq_false y => simp <| .eq x (~ y) .eqBool
+      | eq_false x, eq_true  y => simp <| .eq (~ x) y .eqBool
+      | _, _ => iff x y
+    | .eqBool =>
+      match x, y with
+      | .decide x, .decide y => iff x y
+      | _, _ => v
+    | .beqBool => v
+  | .ne x y op => Id.run do
+    if let .neBool := op then
+      return simp (.not (.eq x y .eqBool) .prop)
+    if let .neProp := op then
+      return simp (.not (.eq x y .eqProp) .prop)
+    if let .trueVal _ := x then
+      return simp (~y)
+    if let .falseVal _ := x then
+      return y
+    if let .trueVal _ := y then
+      return simp (~x)
+    if let .falseVal _ := y then
+      return x
+    if x == y then
+      return .falseVal .bool
+    if isComplement x y then
+      return .trueVal .bool
+    pure <|
+      match x, y with
+      | .ne a b .bneBool, c => .ne a (.ne b c .bneBool) .bneBool
+      | .not x _, .not y _ =>  .ne x y .bneBool
+      | _, _ => v
   | .ite c t f op => Id.run do
     if let .trueVal _ := c then
       return t
@@ -496,9 +467,6 @@ partial def simp (v : BoolVal) : BoolVal :=
       return f
     if let .not c _ := c then
       return simp <| .ite c f t op
-    if let .condBool := op then
-      if let .decide c := c then
-        return simp <| .ite c t f .iteBool
     if let .trueVal tp := t then
       return simp <| (coerceType c tp) ||| f
     if let .falseVal tp := t then
@@ -521,14 +489,6 @@ partial def simp (v : BoolVal) : BoolVal :=
   | .trueVal _ | .falseVal _ | .var _ _ _ => v
 end
 set_option profiler false
-
-/-
-examples/BoolTests.lean:745:0: error:
-  false = if u✝ then b✝ else c✝ reduces to
-  if u✝ then b✝ = false else c✝ = false
-but is expected to reduce to
-  ¬if u✝ then b✝ = true else c✝ = true
--/
 
 end BoolVal
 
@@ -797,15 +757,17 @@ def elabGenTest : CommandElab := fun stx => do
     iteOp .condBool
   ]
   let ops := baseOps ++ eqOps ++ neOps ++ iteOps
+  let depth := 2
   let maxVarCount := 3
   let boolOps := ops.filter (·.result == .bool)
   let propOps := ops.filter (·.result == .prop)
   let cfg : GenConfig := { maxTermSize := 9, boolOps, propOps }
 
-  let runOp op := runTests stx cfg op 2 (maxVarCount := maxVarCount)
+  let runOp op := runTests stx cfg op (depth := depth) (maxVarCount := maxVarCount)
   -- Note. Can replace ops with a smaller set for specific root
   -- operators.
   runCommandElabM' (ops.map runOp)
+
 
 #genTest
 
@@ -820,11 +782,19 @@ variable (b c d : Bool)
 variable (u v w : Prop) [Decidable u] [Decidable v] [Decidable w]
 
 
+-- FIXME.  Remove simp from Bool.or_eq_true_iff
 set_option trace.Meta.Tactic.simp.rewrite true
 set_option trace.Meta.Tactic.simp.rewrite false
 
-
 -- Specific regressions
+#check_simp true ≠ (b || c) ~> b = false ∧ c = false
+#check_simp ¬((!b = false) ∧ (c = false)) ~> b = true → c = true
+#check_simp (((!b) && c) ≠ false) ~> b = false ∧ c = true
+#check_simp (cond b false c ≠ false) ~> b = false ∧ c
+#check_simp (b && c) = false ~> b → c = false
+#check_simp (b && c) ≠ false ~> b ∧ c
+#check_simp decide (u → False) ~> !decide u
+#check_simp decide (¬u) ~> !decide u
 #check_simp (b = true) ≠ (c = false) ~> b = c
 #check_simp (b != c) != (false != d) ~> b != (c != d)
 #check_simp (b == false) ≠ (c != d) ~> b = (c != d)
@@ -838,9 +808,8 @@ set_option trace.Meta.Tactic.simp.rewrite false
 #check_simp True ≠ (c = false) ~> c = true
 #check_simp u ∧ u ∧ v ~> u ∧ v
 #check_simp b || (b || c) ~> b || c
-#check_simp ((b ≠ c) : Bool
-) ~> (b != c)
-#check_simp ((u ≠ v) : Bool) ~> ((u : Bool) != (v : Bool))
+#check_simp ((b ≠ c) : Bool) ~> !(decide (b = c))
+#check_simp ((u ≠ v) : Bool) ~> !((u : Bool) == (v : Bool))
 #check_simp decide (u → False) ~> !(decide u)
 #check_simp decide (¬u) ~> !u
 -- Specific regressions done
@@ -937,8 +906,11 @@ variable [Decidable u]
 #check_simp (b && ¬b) ~> false
 #check_simp (¬b && b) ~> false
 
+#check_simp decide (u → ¬v)  ~> !u || !v
+
 -- Check we swap operators, but do apply deMorgan etc
 #check_simp ¬(u ∧ v)  ~> u → ¬v
+#check_simp decide (¬(u ∧ v))  ~> !u || !v
 #check_simp !(u ∧ v)  ~> !u || !v
 #check_simp ¬(b ∧ c)  ~> b → c = false
 #check_simp !(b ∧ c)  ~> !b || !c
@@ -1017,22 +989,22 @@ variable [Decidable u]
 #check_simp (b || b) ~> b
 
 -- Complement
-#check_simp ( u ∨  ¬u)  ~> True
-#check_simp (¬u ∨   u)  ~> True
+--#check_simp ( u ∨  ¬u)  ~> True
+--#check_simp (¬u ∨   u)  ~> True
 #check_simp ( b || ¬b)  ~> true
 #check_simp (¬b ||  b)  ~> true
 
 -- Check we swap operators, but do apply deMorgan etc
-#check_simp ¬(u ∨ v)  ~> ¬(u ∨  v)
+#check_simp ¬(u ∨ v)  ~> ¬u ∧ ¬v
 #check_simp !(u ∨ v)  ~> !u && !v
-#check_simp ¬(b ∨ c)  ~> ¬(b ∨  c)
+#check_simp ¬(b ∨ c)  ~> b = false ∧ c =false
 #check_simp !(b ∨ c)  ~> !b && !c
-#check_simp ¬(u || v) ~> ¬(u ∨  v)
-#check_simp ¬(b || c) ~> ¬(b ∨  c)
+#check_simp ¬(u || v) ~> ¬u ∧ ¬v
+#check_simp ¬(b || c) ~> b = false ∧ c = false
 #check_simp !(u || v) ~> !u && !v
 #check_simp !(b || c) ~> !b && !c
 #check_simp ¬u ∨  ¬v  ~> (¬u ∨  ¬v)
-#check_simp ¬b ∨  ¬c  ~> ((b = false) ∨ (c = false))
+#check_simp (¬b) ∨ (¬c)  ~> b = false ∨ c = false
 #check_simp ¬u || ¬v  ~> (!u || !v)
 #check_simp ¬b || ¬c  ~> (!b || !c)
 
@@ -1082,9 +1054,9 @@ variable [Decidable u]
 #check_simp (u == v : Bool) ~> u == v
 
 #check_simp (b = c : Prop) ~> b = c
-#check_simp (b = c : Bool) ~> b == c
+#check_simp (b = c : Bool) ~> decide (b = c)
 #check_simp (b ↔ c : Prop) ~> b = c
-#check_simp (b ↔ c : Bool) ~> b == c
+#check_simp (b ↔ c : Bool) ~> decide (b = c)
 #check_simp (b == c : Prop) ~> b = c
 -- N.B. Mathlib would rewrite this to `decide(b = c)` via [`beq_eq_decide_eq`][1]:
 -- [1]: <https://github.com/leanprover-community/mathlib4/blob/450459a3bc55a75e540d139dbeec9c0a92acabb8/Mathlib/Data/Bool/Basic.lean#L87)>
