@@ -11,6 +11,19 @@ import Std
 
 open Lean Lean.Meta Lean.Elab Lean.Elab.Term Lean.Elab.Command
 
+-- FIXME: Add lemmas below
+
+/-
+This lemma is needed for resolving non-confluence of `decide (ite u b c = true)`:
+
+This reduces to the two pairs
+1. `ite u b c` via `decide_coe`
+2. `decide (ite u (b = true) (c = true))` via `ite_eq_true_distrib`
+
+-/
+
+/-- TODO: Replace `decide_coe` with this one. -/
+
 
 -- This file runs many tests on simp and other operations on
 -- Boolean/Prop values.
@@ -281,12 +294,8 @@ partial def simp (v : BoolVal) : BoolVal :=
         | .bneBool => panic! "Unexpected bool"
       | .ite c t f op =>
         match op with
-        | .iteProp =>
-          .ite c (.decide t) (.decide f) .iteBool
-        | .diteProp =>
-          panic! "expected dite to simplify away."
-        | _ =>
-          panic! s!"Unexpected bool when prop expected."
+        | .iteProp => simp <| .ite c (.decide t) (.decide f) .iteBool
+        | _ => v
       | .var _ _ .bool | .decide _ | .eq _ _ _ =>
         panic! s!"Unexpected prop {repr p} when bool expected."
   | .not t _ =>
@@ -410,7 +419,7 @@ partial def simp (v : BoolVal) : BoolVal :=
     | .and x y _ => simp <| .implies (eq_true x) (eq_false y)
     | .or  x y _ => simp <| .and (eq_false x) (eq_false y) .prop
     | .eq x y .beqBool => simp <| .not (.eq x y .eqBool) .prop
-    | .ne x y .bneBool => simp <| .not (.ne x y .neBool) .prop
+    | .ne x y .bneBool => simp <| .eq x y .eqBool
     | .ite c t f _ =>
       simp <| .ite (coerceType c .prop) (eq_false t) (eq_false f) .iteProp
     | .eq _ _ _ | .ne _ _ _ =>
@@ -757,7 +766,7 @@ def elabGenTest : CommandElab := fun stx => do
     iteOp .condBool
   ]
   let ops := baseOps ++ eqOps ++ neOps ++ iteOps
-  let depth := 2
+  let depth := 3
   let maxVarCount := 3
   let boolOps := ops.filter (·.result == .bool)
   let propOps := ops.filter (·.result == .prop)
@@ -767,7 +776,6 @@ def elabGenTest : CommandElab := fun stx => do
   -- Note. Can replace ops with a smaller set for specific root
   -- operators.
   runCommandElabM' (ops.map runOp)
-
 
 #genTest
 
@@ -781,12 +789,19 @@ variable (p q : Prop)
 variable (b c d : Bool)
 variable (u v w : Prop) [Decidable u] [Decidable v] [Decidable w]
 
-
 -- FIXME.  Remove simp from Bool.or_eq_true_iff
 set_option trace.Meta.Tactic.simp.rewrite true
+#check_simp b != !c ~> b != !c
+
 set_option trace.Meta.Tactic.simp.rewrite false
+set_option trace.Meta.Tactic.simp false
 
 -- Specific regressions
+#check_simp (b != !c) = false ~> b = !c
+#check_simp ¬(u → v ∨ w) ~> u ∧ ¬v ∧ ¬w
+#check_simp decide (u ∧ (v → False)) ~> decide u && !decide v
+#check_simp decide (cond true b c = true) ~> b
+#check_simp decide (ite u b c = true) ~> ite u b c
 #check_simp true ≠ (b || c) ~> b = false ∧ c = false
 #check_simp ¬((!b = false) ∧ (c = false)) ~> b = true → c = true
 #check_simp (((!b) && c) ≠ false) ~> b = false ∧ c = true
