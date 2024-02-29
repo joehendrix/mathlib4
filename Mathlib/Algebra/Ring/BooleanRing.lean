@@ -590,10 +590,10 @@ open Bool
 
 instance : BooleanRing Bool where
   add := xor
-  add_assoc := xor_assoc
+  add_assoc := bne_assoc
   zero := false
-  zero_add := Bool.false_xor
-  add_zero := Bool.xor_false
+  zero_add := Bool.false_bne
+  add_zero := Bool.bne_false
   neg := id
   sub := xor
   sub_eq_add_neg _ _ := rfl

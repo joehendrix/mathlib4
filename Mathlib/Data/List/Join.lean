@@ -47,7 +47,7 @@ theorem join_concat (L : List (List α)) (l : List α) : join (L.concat l) = joi
 --     Should the correct spelling now be `== false` instead?
 @[simp]
 theorem join_filter_isEmpty_eq_false [DecidablePred fun l : List α => l.isEmpty = false] :
-    ∀ {L : List (List α)}, join (L.filter fun l => l.isEmpty = false) = L.join
+    ∀ {L : List (List α)}, join (L.filter fun l => !l.isEmpty) = L.join
   | [] => rfl
   | [] :: L => by
       simp [join_filter_isEmpty_eq_false (L := L), isEmpty_iff_eq_nil]
@@ -58,7 +58,8 @@ theorem join_filter_isEmpty_eq_false [DecidablePred fun l : List α => l.isEmpty
 @[simp]
 theorem join_filter_ne_nil [DecidablePred fun l : List α => l ≠ []] {L : List (List α)} :
     join (L.filter fun l => l ≠ []) = L.join := by
-  simp [join_filter_isEmpty_eq_false, ← isEmpty_iff_eq_nil]
+  simp [← isEmpty_iff_eq_nil]
+
 #align list.join_filter_ne_nil List.join_filter_ne_nil
 
 theorem join_join (l : List (List (List α))) : l.join.join = (l.map join).join := by

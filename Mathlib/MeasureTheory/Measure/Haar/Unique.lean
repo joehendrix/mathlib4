@@ -710,7 +710,7 @@ theorem measure_isHaarMeasure_eq_smul_of_isEverywherePos [LocallyCompactSpace G]
         simpa using mem_leftCoset y (Set.mul_mem_mul one_k (Set.inv_mem_inv.mpr one_k))
       exact mem_biUnion ym this
     · obtain ⟨x, -, xm, z, zy, zx⟩ : ∃ x, y ≠ x ∧ x ∈ m ∧ ∃ z, z ∈ y • k ∧ z ∈ x • k := by
-        simpa [mA.1, hy, insert_subset_iff, pairwiseDisjoint_insert, mA.2, not_disjoint_iff]
+        simpa [-not_imp, mA.1, hy, insert_subset_iff, pairwiseDisjoint_insert, mA.2, not_disjoint_iff]
           using h'y
       have : y ∈ x • (k * k⁻¹) := by
         rw [show y = x * ((x⁻¹ * z) * (y⁻¹ * z)⁻¹) by group]

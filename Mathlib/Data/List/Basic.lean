@@ -3352,7 +3352,6 @@ theorem reduceOption_length_lt_iff {l : List (Option α)} :
   rw [(reduceOption_length_le l).lt_iff_ne, Ne, reduceOption_length_eq_iff]
   induction l <;> simp [*]
   rw [@eq_comm _ none, ← Option.not_isSome_iff_eq_none, Decidable.imp_iff_not_or]
-  simp [Option.isNone_iff_eq_none]
 #align list.reduce_option_length_lt_iff List.reduceOption_length_lt_iff
 
 theorem reduceOption_singleton (x : Option α) : [x].reduceOption = x.toList := by cases x <;> rfl
