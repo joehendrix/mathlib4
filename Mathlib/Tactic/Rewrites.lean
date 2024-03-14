@@ -4,18 +4,14 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Scott Morrison
 -/
 import Lean.Elab.Tactic.Location
-import Std.Data.MLList.Heartbeats
-import Std.Tactic.Relation.Rfl
-import Lean.Meta.Tactic.SolveByElim
-import Std.Util.Pickle
-import Std.Util.Cache
-import Mathlib.Init.Core
-import Mathlib.Control.Basic
-import Mathlib.Data.MLList.Dedup
-import Mathlib.Lean.Expr.Basic
-import Mathlib.Lean.Meta.DiscrTree
+import Lean.Elab.Tactic.SolveByElim
+import Lean.Meta.Tactic.Assumption
+import Lean.Meta.Tactic.Rewrite
 import Lean.Meta.Tactic.TryThis
-import Lean.Elab.Tactic.Location
+import Lean.Util.Heartbeats
+import Std.Tactic.Relation.Rfl
+import Std.Util.Pickle
+import Mathlib.Lean.Meta.DiscrTree
 
 /-!
 # The `rewrites` tactic.
@@ -46,7 +42,7 @@ end Lean.Meta
 
 namespace Mathlib.Tactic.Rewrites
 
-open Lean Meta Std.Tactic Tactic.TryThis
+open Lean Meta Tactic.TryThis
 
 initialize registerTraceClass `Tactic.rewrites
 initialize registerTraceClass `Tactic.rewrites.lemmas
@@ -65,7 +61,7 @@ open Lean.Meta.DiscrTree (keysSpecific)
 def processLemma (name : Name) (constInfo : ConstantInfo) :
     MetaM (Array (Array DiscrTree.Key × (Name × Bool × Nat))) := do
   if constInfo.isUnsafe then return #[]
-  if ← name.isBlackListed then return #[]
+  if !allowCompletion (←getEnv) name then return #[]
   -- We now remove some injectivity lemmas which are not useful to rewrite by.
   if name matches .str _ "injEq" then return #[]
   if name matches .str _ "sizeOf_spec" then return #[]
@@ -101,15 +97,47 @@ def localHypotheses (except : List FVarId := []) : MetaM (Array (Expr × Bool ×
     | _ => pure ()
   return result
 
+
+def updateTree (name : Name) (constInfo : ConstantInfo) (tree : DiscrTree (Name × Bool × Nat)) := do
+  let entries ← processLemma name constInfo
+  pure <| entries.foldl (init := tree) (fun (t : DiscrTree (Name × Bool × Nat)) (k, v) => t.insertCore k v)
+
+/--
+Build a `DiscrTreeCache`,
+from a function that returns a collection of keys and values for each declaration.
+-/
+def mkCache (profilingName : String)
+    (init : MetaM (DiscrTree (Name × Bool × Nat)))
+    (post? : Option (Array (Name × Bool × Nat) → Array (Name × Bool × Nat))) :
+    MetaM (DiscrTree (Name × Bool × Nat)) := do
+  try
+    -- We allow arbitrary failures in the `pre` tactic,
+    -- and fall back on folding over the entire environment.
+    -- In practice the `pre` tactic may be unpickling an `.olean`,
+    -- and may fail after leanprover/lean4#2766 because the embedded hash is incorrect.
+    return ← init
+  catch _ =>
+    profileitM Exception profilingName (← getOptions) do
+      let env ← getEnv
+      let T₂ ←
+            env.constants.map₁.foldM (init := {}) fun tree₂ name constInfo => do
+              updateTree name constInfo tree₂
+      let T₂ :=
+        match post? with
+        | some f => T₂.mapArrays f
+        | none => T₂
+      pure T₂
+
 /-- Construct the discrimination tree of all lemmas. -/
-def buildDiscrTree : IO (DiscrTreeCache (Name × Bool × Nat)) :=
-  DiscrTreeCache.mk "rw?: init cache" processLemma
+def buildDiscrTree : MetaM (DiscrTree (Name × Bool × Nat)) :=
+  mkCache "rw?: init cache"
     -- Sort so lemmas with longest names come first.
     -- This is counter-intuitive, but the way that `DiscrTree.getMatch` returns results
     -- means that the results come in "batches", with more specific matches *later*.
     -- Thus we're going to call reverse on the result of `DiscrTree.getMatch`,
     -- so if we want to try lemmas with shorter names first,
     -- we need to put them into the `DiscrTree` backwards.
+    (init := failure)
     (post? := some fun A =>
       A.map (fun (n, m) => (n.toString.length, n, m)) |>.qsort (fun p q => p.1 > q.1) |>.map (·.2))
 
@@ -124,12 +152,12 @@ def cachePath : IO FilePath :=
 /--
 Retrieve the current cache of lemmas.
 -/
-initialize rewriteLemmas : DiscrTreeCache (Name × Bool × Nat) ← unsafe do
+unsafe def mkDiscrTree : MetaM (DiscrTree (Name × Bool × Nat)) := do
   let path ← cachePath
   if (← path.pathExists) then
     -- We can drop the `CompactedRegion` value from `unpickle`; we do not plan to free it
     let d := (·.1) <$> unpickle (DiscrTree (Name × Bool × Nat)) path
-    DiscrTreeCache.mk "rw?: using cache" processLemma (init := d)
+    mkCache "rw?: using cache" (init := d) (post? := none)
   else
     buildDiscrTree
 
@@ -147,33 +175,21 @@ structure RewriteResult where
   /-- Pretty-printed result. -/
   -- This is an `Option` so that it can be computed lazily.
   ppResult? : Option String
-  /-- Can the new goal in `result` be closed by `with_reducible rfl`? -/
-  -- This is an `Option` so that it can be computed lazily.
-  rfl? : Option Bool
   /-- The metavariable context after the rewrite.
   This needs to be stored as part of the result so we can backtrack the state. -/
   mctx : MetavarContext
 
 /-- Update a `RewriteResult` by filling in the `rfl?` field if it is currently `none`,
 to reflect whether the remaining goal can be closed by `with_reducible rfl`. -/
-def RewriteResult.computeRfl (r : RewriteResult) : MetaM RewriteResult := do
-  if let some _ := r.rfl? then
-    return r
+def RewriteResult.computeRfl (r : RewriteResult) : MetaM Bool := do
   try
     withoutModifyingState <| withMCtx r.mctx do
       -- We use `withReducible` here to follow the behaviour of `rw`.
       withReducible (← mkFreshExprMVar r.result.eNew).mvarId!.applyRfl
       -- We do not need to record the updated `MetavarContext` here.
-      pure { r with rfl? := some true }
-  catch _ =>
-    pure { r with rfl? := some false }
-
-/-- Pretty print the result of the rewrite, and store it for later use. -/
-def RewriteResult.prepare_ppResult (r : RewriteResult) : MetaM RewriteResult := do
-  if let some _ := r.ppResult? then
-    return r
-  else
-    return { r with ppResult? := some ((← ppExpr r.result.eNew).pretty) }
+      pure true
+  catch _e =>
+    pure false
 
 /--
 Pretty print the result of the rewrite.
@@ -201,6 +217,46 @@ inductive SideConditions
 | assumption
 | solveByElim
 
+
+def rwLemma (ctx : MetavarContext) (goal : MVarId) (target : Expr) (side : SideConditions := .solveByElim) (lem : Expr ⊕ Name) (symm : Bool) (weight : Nat) : MetaM (Option RewriteResult) :=
+  withMCtx ctx do
+    let some expr ← (match lem with
+    | .inl hyp => pure (some hyp)
+    | .inr lem => some <$> mkConstWithFreshMVarLevels lem <|> pure none)
+      | return none
+    trace[Tactic.rewrites] m!"considering {if symm then "← " else ""}{expr}"
+    let some result ← some <$> goal.rewrite target expr symm <|> pure none
+      | return none
+    if result.mvarIds.isEmpty then
+      return some {
+        expr,
+        symm,
+        weight,
+        result,
+        ppResult? := none,
+        mctx := ← getMCtx
+      }
+    else
+      -- There are side conditions, which we try to discharge using local hypotheses.
+      match (← match side with
+        | .none => pure false
+        | .assumption => ((result.mvarIds.mapM fun m => m.assumption) >>= fun _ => pure true) <|> pure false
+        | .solveByElim => (solveByElim result.mvarIds >>= fun _ => pure true) <|> pure false) with
+      | false => return none
+      | true =>
+        -- If we succeed, we need to reconstruct the expression to report that we rewrote by.
+        let some expr := result.by? | return none
+        let expr ← instantiateMVars expr
+        let (expr, symm) := if expr.isAppOfArity ``Eq.symm 4 then
+            (expr.getArg! 3, true)
+          else
+            (expr, false)
+        return some {
+            expr, symm, weight, result,
+            ppResult? := none,
+            mctx := ← getMCtx
+          }
+
 /--
 Find lemmas which can rewrite the goal.
 
@@ -210,12 +266,11 @@ See also `rewrites` for a more convenient interface.
 -- We need to supply the current `MetavarContext` (which will be reused for each lemma application)
 -- because `MLList.squash` executes lazily,
 -- so there is no opportunity for `← getMCtx` to record the context at the call site.
-def rewritesCore (hyps : Array (Expr × Bool × Nat))
+def rewriteCandidates (hyps : Array (Expr × Bool × Nat))
     (lemmas : DiscrTree (Name × Bool × Nat) × DiscrTree (Name × Bool × Nat))
-    (ctx : MetavarContext) (goal : MVarId) (target : Expr)
-    (forbidden : NameSet := ∅)
-    (side : SideConditions := .solveByElim) :
-    MLList MetaM RewriteResult := MLList.squash fun _ => do
+    (target : Expr)
+    (forbidden : NameSet := ∅) :
+    MetaM (Array ((Expr ⊕ Name) × Bool × Nat)) := do
   -- Get all lemmas which could match some subexpression
   let candidates := (← lemmas.1.getSubexpressionMatches target discrTreeConfig)
     ++ (← lemmas.2.getSubexpressionMatches target discrTreeConfig)
@@ -243,73 +298,104 @@ def rewritesCore (hyps : Array (Expr × Bool × Nat))
   trace[Tactic.rewrites.lemmas] m!"Candidate rewrite lemmas:\n{deduped}"
 
   -- Lift to a monadic list, so the caller can decide how much of the computation to run.
-  let hyps := MLList.ofArray <| hyps.map fun ⟨hyp, symm, weight⟩ => (Sum.inl hyp, symm, weight)
-  let lemmas := MLList.ofArray <| deduped.map fun ⟨lem, symm, weight⟩ => (Sum.inr lem, symm, weight)
+  let hyps := hyps.map fun ⟨hyp, symm, weight⟩ => (Sum.inl hyp, symm, weight)
+  let lemmas := deduped.map fun ⟨lem, symm, weight⟩ => (Sum.inr lem, symm, weight)
+  pure <| hyps ++ lemmas
 
-  pure <| (hyps |>.append fun _ => lemmas).filterMapM fun ⟨lem, symm, weight⟩ => withMCtx ctx do
-    let some expr ← (match lem with
-    | .inl hyp => pure (some hyp)
-    | .inr lem => try? <| mkConstWithFreshMVarLevels lem) | return none
-    trace[Tactic.rewrites] m!"considering {if symm then "← " else ""}{expr}"
-    let some result ← try? do goal.rewrite target expr symm
-      | return none
-    if result.mvarIds.isEmpty then
-      return some ⟨expr, symm, weight, result, none, none, ← getMCtx⟩
-    else
-      -- There are side conditions, which we try to discharge using local hypotheses.
-      match (← match side with
-        | .none => pure none
-        | .assumption => try? do _ ← result.mvarIds.mapM fun m => m.assumption
-        | .solveByElim => try? do solveByElim result.mvarIds) with
-      | none => return none
-      | some _ =>
-        -- If we succeed, we need to reconstruct the expression to report that we rewrote by.
-        let some expr := result.by? | return none
-        let expr ← instantiateMVars expr
-        let (expr, symm) := if expr.isAppOfArity ``Eq.symm 4 then
-            (expr.getArg! 3, true)
+structure RewriteResultConfig where
+  stopAtRfl : Bool
+  max : Nat
+  minHeartbeats : Nat
+  goal : MVarId
+  target : Expr
+  side : SideConditions := .solveByElim
+  mctx : MetavarContext
+
+structure FinRwResult where
+  /-- The lemma we rewrote by.
+  This is `Expr`, not just a `Name`, as it may be a local hypothesis. -/
+  expr : Expr
+  /-- `True` if we rewrote backwards (i.e. with `rw [← h]`). -/
+  symm : Bool
+  /-- The result from the `rw` tactic. -/
+  result : Meta.RewriteResult
+  /-- The metavariable context after the rewrite.
+  This needs to be stored as part of the result so we can backtrack the state. -/
+  mctx : MetavarContext
+  newGoal : Option Expr
+
+def FinRwResult.mkFin (r : RewriteResult) (rfl? : Bool) : FinRwResult := {
+    expr := r.expr,
+    symm := r.symm,
+    result := r.result,
+    mctx := r.mctx,
+    newGoal :=
+      if rfl? = true then
+        some (Expr.lit (.strVal "no goals"))
+      else
+        some r.result.eNew
+  }
+
+def FinRwResult.addSuggestion (ref : Syntax) (r : FinRwResult) : Elab.TermElabM Unit := do
+  withMCtx r.mctx do
+    addRewriteSuggestion ref [(r.expr, r.symm)] (type? := r.newGoal) (origSpan? := ← getRef)
+
+def takeListAux (cfg : RewriteResultConfig) (seen : HashMap String Unit) (acc : Array FinRwResult)
+    (xs : List ((Expr ⊕ Name) × Bool × Nat)) : MetaM (Array FinRwResult) :=
+  match xs with
+  | [] =>
+    pure acc
+  | (lem, symm, weight) :: xs => do
+    if (← getRemainingHeartbeats) < cfg.minHeartbeats then
+      return acc
+    if acc.size ≥ cfg.max then
+      return acc
+    let res ←
+          withoutModifyingState <| withMCtx cfg.mctx do
+            rwLemma cfg.mctx cfg.goal cfg.target cfg.side lem symm weight
+    match res with
+    | none =>
+      takeListAux cfg seen acc xs
+    | some r =>
+      let s ← withoutModifyingState <| withMCtx r.mctx r.ppResult
+      if seen.contains s then
+        takeListAux cfg seen acc xs
+      else
+        let rfl? ← RewriteResult.computeRfl r
+        if true then -- cfg.stopAtRfl
+          if rfl? then
+            pure #[FinRwResult.mkFin r true]
           else
-            (expr, false)
-        return some ⟨expr, symm, weight, result, none, none, ← getMCtx⟩
-
-/--
-Find lemmas which can rewrite the goal, and deduplicate based on pretty-printed results.
-Note that this builds a `HashMap` containing the results, and so may consume significant memory.
--/
-def rewritesDedup (hyps : Array (Expr × Bool × Nat))
-    (lemmas : DiscrTree (Name × Bool × Nat) × DiscrTree (Name × Bool × Nat))
-    (mctx : MetavarContext) (goal : MVarId) (target : Expr)
-    (forbidden : NameSet := ∅) (side : SideConditions := .solveByElim) :
-    MLList MetaM RewriteResult :=
-  rewritesCore hyps lemmas mctx goal target forbidden side
-    -- Don't report duplicate results.
-    -- (TODO: a config flag to disable this,
-    -- if distinct-but-pretty-print-the-same results are desirable?)
-    |>.mapM (fun r => r.prepare_ppResult)
-    |>.dedupBy (fun r => pure r.ppResult?)
+            let seen := seen.insert s ()
+            takeListAux cfg seen (acc.push (FinRwResult.mkFin r false)) xs
+        else
+          let seen := seen.insert s ()
+          takeListAux cfg seen (acc.push (FinRwResult.mkFin r  rfl?)) xs
 
 /-- Find lemmas which can rewrite the goal. -/
-def rewrites (hyps : Array (Expr × Bool × Nat))
+def findRewrites (hyps : Array (Expr × Bool × Nat))
     (lemmas : DiscrTree (Name × Bool × Nat) × DiscrTree (Name × Bool × Nat))
     (goal : MVarId) (target : Expr)
     (forbidden : NameSet := ∅) (side : SideConditions := .solveByElim)
-    (stopAtRfl : Bool := false) (max : Nat := 20)
-    (leavePercentHeartbeats : Nat := 10) : MetaM (List RewriteResult) := do
-  let results ← rewritesDedup hyps lemmas (← getMCtx) goal target forbidden side
-    -- Stop if we find a rewrite after which `with_reducible rfl` would succeed.
-    |>.mapM RewriteResult.computeRfl -- TODO could simply not compute this if `stopAtRfl` is False
-    |>.takeUpToFirst (fun r => stopAtRfl && r.rfl? = some true)
-    -- Don't use too many heartbeats.
-    |>.whileAtLeastHeartbeatsPercent leavePercentHeartbeats
-    -- Bound the number of results.
-    |>.takeAsList max
-  return match results.filter (fun r => stopAtRfl && r.rfl? = some true) with
-  | [] =>
-    -- TODO consider sorting the results,
-    -- e.g. if we use solveByElim to fill arguments,
-    -- prefer results using local hypotheses.
-    results
-  | results => results
+    (stopAtRfl : Bool) (max : Nat := 20)
+    (leavePercentHeartbeats : Nat := 10) : MetaM (List FinRwResult) := do
+  let mctx ← getMCtx
+  let candidates ← rewriteCandidates hyps lemmas target forbidden
+  let minHeartbeats : Nat :=
+        if (← getMaxHeartbeats) = 0 then
+          0
+        else
+          leavePercentHeartbeats * (← getRemainingHeartbeats) / 100
+  let cfg : RewriteResultConfig := {
+    stopAtRfl := stopAtRfl,
+    minHeartbeats,
+    max,
+    mctx,
+    goal,
+    target,
+    side
+  }
+  return (← takeListAux cfg {} (Array.mkEmpty max) candidates.toList).toList
 
 open Lean.Parser.Tactic
 
@@ -330,13 +416,43 @@ You can use `rw? [-my_lemma, -my_theorem]` to prevent `rw?` using the named lemm
 -/
 syntax (name := rewrites') "rw?" (ppSpace location)? (forbidden)? : tactic
 
+
+private def ExtState := IO.Ref (Option (DiscrTree (Name × Bool × Nat)))
+
+private initialize ExtState.default : IO.Ref (Option (DiscrTree (Name × Bool × Nat))) ← do
+  IO.mkRef .none
+
+private instance : Inhabited ExtState where
+  default := ExtState.default
+
+private initialize ext : EnvExtension ExtState ←
+  registerEnvExtension (IO.mkRef .none)
+
+def getDeclCache :
+    MetaM (DiscrTree (Name × Bool × Nat) × DiscrTree (Name × Bool × Nat)) := do
+
+  let treeRef := ext.getState (←getEnv)
+
+  let importTree ←
+    match ←treeRef.get with
+    | some t => pure t
+    | none => do
+      let t ← profileitM Exception  "librarySearch launch" (←getOptions) (unsafe mkDiscrTree)
+      treeRef.set (some t)
+      pure t
+
+  let T1 ← (← getEnv).constants.map₂.foldlM (init := {}) fun a name constInfo =>
+    updateTree name constInfo a
+  pure (T1, importTree)
+
 open Elab.Tactic Elab Tactic in
 elab_rules : tactic |
     `(tactic| rw?%$tk $[$loc]? $[[ $[-$forbidden],* ]]?) => do
-  let lems ← rewriteLemmas.get
+
+  let lems ← getDeclCache
   let forbidden : NameSet :=
     ((forbidden.getD #[]).map Syntax.getId).foldl (init := ∅) fun s n => s.insert n
-  reportOutOfHeartbeats `rewrites tk
+  reportOutOfHeartbeats `findRewrites tk
   let goal ← getMainGoal
   -- TODO fix doc of core to say that * fails only if all failed
   withLocation (expandOptLocation (Lean.mkOptionalNode loc))
@@ -345,7 +461,7 @@ elab_rules : tactic |
       if a.isImplementationDetail then return
       let target ← instantiateMVars (← f.getType)
       let hyps ← localHypotheses (except := [f])
-      let results ← rewrites hyps lems goal target (stopAtRfl := false) forbidden
+      let results ← findRewrites hyps lems goal target (stopAtRfl := false) forbidden
       reportOutOfHeartbeats `rewrites tk
       if results.isEmpty then
         throwError "Could not find any lemmas which can rewrite the hypothesis {← f.getUserName}"
@@ -360,14 +476,11 @@ elab_rules : tactic |
     do withMainContext do
       let target ← instantiateMVars (← goal.getType)
       let hyps ← localHypotheses
-      let results ← rewrites hyps lems goal target (stopAtRfl := true) forbidden
+      let results ← findRewrites hyps lems goal target (stopAtRfl := true) forbidden
       reportOutOfHeartbeats `rewrites tk
       if results.isEmpty then
         throwError "Could not find any lemmas which can rewrite the goal"
-      for r in results do withMCtx r.mctx do
-        let newGoal := if r.rfl? = some true then Expr.lit (.strVal "no goals") else r.result.eNew
-        addRewriteSuggestion tk [(r.expr, r.symm)]
-          newGoal (origSpan? := ← getRef)
+      results.forM (·.addSuggestion tk)
       if let some r := results[0]? then
         setMCtx r.mctx
         replaceMainGoal

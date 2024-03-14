@@ -4,6 +4,19 @@ import Mathlib.CategoryTheory.Category.Basic
 import Mathlib.Data.List.Basic
 import Mathlib.Algebra.Group.Basic
 
+-- These are original imports of Rewrites
+-- Needed for tests to succeed.
+import Std.Data.MLList.Heartbeats
+import Lean.Meta.Tactic.SolveByElim
+import Std.Util.Cache
+import Mathlib.Init.Core
+import Mathlib.Control.Basic
+import Mathlib.Data.MLList.Dedup
+import Mathlib.Lean.Expr.Basic
+import Mathlib.Lean.Meta.DiscrTree
+import Lean.Meta.Tactic.TryThis
+import Lean.Elab.Tactic.Location
+
 private axiom test_sorry : ∀ {α}, α
 set_option autoImplicit true
 

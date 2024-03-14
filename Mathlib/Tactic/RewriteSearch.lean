@@ -242,7 +242,11 @@ def rewrites (hyps : Array (Expr × Bool × Nat))
     (forbidden : NameSet := ∅) (n : SearchNode) : MLList MetaM SearchNode := .squash fun _ => do
   if ← isTracingEnabledFor `rw_search then do
     trace[rw_search] "searching:\n{← toString n}"
-  return rewritesCore hyps lemmas n.mctx n.goal n.type forbidden
+  let candidates ← rewriteCandidates hyps lemmas n.type forbidden
+  -- Lift to a monadic list, so the caller can decide how much of the computation to run.
+  return MLList.ofArray candidates
+    |>.filterMapM (fun ⟨lem, symm, weight⟩ =>
+        rwLemma n.mctx n.goal n.type .solveByElim lem symm weight)
     |>.enum
     |>.filterMapM fun ⟨k, r⟩ => do n.rewrite r k
 
@@ -254,7 +258,7 @@ def search (n : SearchNode)
     (forbidden : NameSet := ∅) (maxQueued : Option Nat := none) :
     MLList MetaM SearchNode := .squash fun _ => do
   let hyps ← localHypotheses
-  let lemmas ← rewriteLemmas.get
+  let lemmas ← getDeclCache
   let search := bestFirstSearchCore (maxQueued := maxQueued)
     (β := String) (removeDuplicatesBy? := some SearchNode.ppGoal)
     prio estimator (rewrites hyps lemmas forbidden) n
