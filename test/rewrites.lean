@@ -1,21 +1,5 @@
 import Mathlib.Tactic.Rewrites
-import Mathlib.Data.Nat.Prime
-import Mathlib.CategoryTheory.Category.Basic
-import Mathlib.Data.List.Basic
-import Mathlib.Algebra.Group.Basic
-
--- These are original imports of Rewrites
--- Needed for tests to succeed.
-import Std.Data.MLList.Heartbeats
-import Lean.Meta.Tactic.SolveByElim
-import Std.Util.Cache
-import Mathlib.Init.Core
-import Mathlib.Control.Basic
-import Mathlib.Data.MLList.Dedup
-import Mathlib.Lean.Expr.Basic
-import Mathlib.Lean.Meta.DiscrTree
-import Lean.Meta.Tactic.TryThis
-import Lean.Elab.Tactic.Location
+attribute [refl] Eq.refl
 
 private axiom test_sorry : ∀ {α}, α
 set_option autoImplicit true
@@ -39,77 +23,60 @@ info: Try this: rw [@List.map_append]
 example (f : α → β) (L M : List α) : (L ++ M).map f = L.map f ++ M.map f := by
   rw?
 
-open CategoryTheory
-
 /--
-info: Try this: rw [@Category.id_comp]
+info: Try this: rw [Nat.one_mul]
 -- "no goals"
 -/
 #guard_msgs in
-example [Category C] {X Y Z : C} (f : X ⟶ Y) (g : Y ⟶ Z) : f ≫ 𝟙 _ ≫ g = f ≫ g := by
-  rw?
-
-/--
-info: Try this: rw [@mul_left_eq_self]
--- "no goals"
--/
-#guard_msgs in
-example [Group G] (h : G) : 1 * h = h := by
-  rw?
-
-/--
-info: Try this: rw [← @Nat.prime_iff]
--- "no goals"
--/
-#guard_msgs in
-lemma prime_of_prime (n : ℕ) : Prime n ↔ Nat.Prime n := by
+example (h : Nat) : 1 * h = h := by
   rw?
 
 #guard_msgs(drop info) in
-example [Group G] (h : G) (hyp : g * 1 = h) : g = h := by
+example (h : Int) (hyp : g * 1 = h) : g = h := by
   rw? at hyp
   assumption
 
 #guard_msgs(drop info) in
-example : ∀ (x y : ℕ), x ≤ y := by
+example : ∀ (x y : Nat), x ≤ y := by
   intros x y
   rw? -- Used to be an error here https://leanprover.zulipchat.com/#narrow/stream/287929-mathlib4/topic/panic.20and.20error.20with.20rw.3F/near/370495531
   exact test_sorry
 
-example : ∀ (x y : ℕ), x ≤ y := by
+example : ∀ (x y : Nat), x ≤ y := by
   -- Used to be a panic here https://leanprover.zulipchat.com/#narrow/stream/287929-mathlib4/topic/panic.20and.20error.20with.20rw.3F/near/370495531
-  success_if_fail_with_msg "Could not find any lemmas which can rewrite the goal" rw?
+  fail_if_success rw?
   exact test_sorry
 
 axiom K : Type
-@[instance] axiom K.ring : Ring K
+@[instance] axiom K.hasOne : OfNat K 1
+@[instance] axiom K.hasIntCoe : Coe K Int
 
 noncomputable def foo : K → K := test_sorry
 
 #guard_msgs(drop info) in
-example : foo x = 1 ↔ ∃ k : ℤ, x = k := by
+example : foo x = 1 ↔ ∃ k : Int, x = k := by
   rw? -- Used to panic, see https://leanprover.zulipchat.com/#narrow/stream/287929-mathlib4/topic/panic.20and.20error.20with.20rw.3F/near/370598036
   exact test_sorry
 
-lemma six_eq_seven : 6 = 7 := test_sorry
+theorem six_eq_seven : 6 = 7 := test_sorry
 
 -- This test also verifies that we are removing duplicate results;
 -- it previously also reported `Nat.cast_ofNat`
 #guard_msgs(drop info) in
-example : ∀ (x : ℕ), x ≤ 6 := by
+example : ∀ (x : Nat), x ≤ 6 := by
   rw?
-  guard_target = ∀ (x : ℕ), x ≤ 7
+  guard_target = ∀ (x : Nat), x ≤ 7
   exact test_sorry
 
 #guard_msgs(drop info) in
-example : ∀ (x : ℕ) (_w : x ≤ 6), x ≤ 8 := by
+example : ∀ (x : Nat) (_w : x ≤ 6), x ≤ 8 := by
   rw?
-  guard_target = ∀ (x : ℕ) (_w : x ≤ 7), x ≤ 8
+  guard_target = ∀ (x : Nat) (_w : x ≤ 7), x ≤ 8
   exact test_sorry
 
 -- check we can look inside let expressions
 #guard_msgs(drop info) in
-example (n : ℕ) : let y := 3; n + y = 3 + n := by
+example (n : Nat) : let y := 3; n + y = 3 + n := by
   rw?
 
 axiom α : Type
@@ -121,7 +88,7 @@ axiom f_eq (n) : f n = z
 -- This used to report two redundant copies of `f_eq`.
 -- It be lovely if `rw?` could produce two *different* rewrites by `f_eq` here!
 #guard_msgs(drop info) in
-lemma test : f n = f m := by
+theorem test : f n = f m := by
   fail_if_success rw? [-f_eq] -- Check that we can forbid lemmas.
   rw?
   rw [f_eq]

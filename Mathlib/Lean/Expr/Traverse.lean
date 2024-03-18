@@ -14,6 +14,7 @@ set_option autoImplicit true
 namespace Lean.Expr
 
 /-- Maps `f` on each immediate child of the given expression. -/
+@[specialize]
 def traverseChildren [Applicative M] (f : Expr → M Expr) : Expr → M Expr
   | e@(forallE _ d b _) => pure e.updateForallE! <*> f d <*> f b
   | e@(lam _ d b _)     => pure e.updateLambdaE! <*> f d <*> f b
@@ -25,8 +26,7 @@ def traverseChildren [Applicative M] (f : Expr → M Expr) : Expr → M Expr
 
 /-- `e.foldlM f a` folds the monadic function `f` over the subterms of the expression `e`,
 with initial value `a`. -/
-def foldlM {α : Type} {m} [Monad m] (f : α → Expr → m α) (x : α) (e : Expr) : m α :=
-  Prod.snd <$> (StateT.run (e.traverseChildren fun e' =>
-      Functor.mapConst e' (get >>= monadLift ∘ flip f e' >>= set)) x : m _)
+def foldlM {α : Type} {m} [Monad m] (f : α → Expr → m α) (init : α) (e : Expr) : m α :=
+  Prod.snd <$> StateT.run (e.traverseChildren (fun e' => fun a => Prod.mk e' <$> f a e')) init
 
 end Lean.Expr

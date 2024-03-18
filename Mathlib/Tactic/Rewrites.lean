@@ -11,7 +11,7 @@ import Lean.Meta.Tactic.TryThis
 import Lean.Util.Heartbeats
 import Std.Tactic.Relation.Rfl
 import Std.Util.Pickle
-import Mathlib.Lean.Meta.DiscrTree
+import Mathlib.Lean.Expr.Traverse
 
 /-!
 # The `rewrites` tactic.
@@ -55,8 +55,6 @@ def backwardWeight := 1
 /-- Configuration for `DiscrTree`. -/
 def discrTreeConfig : WhnfCoreConfig := {}
 
-open Lean.Meta.DiscrTree (keysSpecific)
-
 /-- Prepare the discrimination tree entries for a lemma. -/
 def processLemma (name : Name) (constInfo : ConstantInfo) :
     MetaM (Array (Array DiscrTree.Key × (Name × Bool × Nat))) := do
@@ -76,7 +74,7 @@ def processLemma (name : Name) (constInfo : ConstantInfo) :
       let lhsKey ← DiscrTree.mkPath lhs discrTreeConfig
       let rhsKey ← DiscrTree.mkPath rhs discrTreeConfig
       return #[(lhsKey, (name, false, forwardWeight * lhsKey.size)),
-        (rhsKey, (name, true, backwardWeight * rhsKey.size))].filter fun t => keysSpecific t.1
+               (rhsKey, (name, true, backwardWeight * rhsKey.size))]
     | _ => return #[]
 
 /-- Select `=` and `↔` local hypotheses. -/
@@ -258,6 +256,34 @@ def rwLemma (ctx : MetavarContext) (goal : MVarId) (target : Expr) (side : SideC
           }
 
 /--
+Find keys which match the expression, or some subexpression.
+
+Note that repeated subexpressions will be visited each time they appear,
+making this operation potentially very expensive.
+It would be good to solve this problem!
+
+Implementation: we reverse the results from `getMatch`,
+so that we return lemmas matching larger subexpressions first,
+and amongst those we return more specific lemmas first.
+-/
+partial def getSubexpressionMatches (d : DiscrTree α) (e : Expr) (config : WhnfCoreConfig) :
+    MetaM (Array α) := do
+  match e with
+  | .bvar _ => return #[]
+  | .forallE _ _ _ _ => forallTelescope e (fun args body => do
+      args.foldlM (fun acc arg => do
+          pure <| acc ++ (← getSubexpressionMatches d (← inferType arg) config))
+        (← getSubexpressionMatches d body config).reverse)
+  | .lam _ _ _ _
+  | .letE _ _ _ _ _ => lambdaLetTelescope e (fun args body => do
+      args.foldlM (fun acc arg => do
+          pure <| acc ++ (← getSubexpressionMatches d (← inferType arg) config))
+        (← getSubexpressionMatches d body config).reverse)
+  | _ =>
+    e.foldlM (fun a f => do
+      pure <| a ++ (← getSubexpressionMatches d f config)) (← d.getMatch e config).reverse
+
+/--
 Find lemmas which can rewrite the goal.
 
 This core function returns a monadic list, to allow the caller to decide how long to search.
@@ -272,8 +298,8 @@ def rewriteCandidates (hyps : Array (Expr × Bool × Nat))
     (forbidden : NameSet := ∅) :
     MetaM (Array ((Expr ⊕ Name) × Bool × Nat)) := do
   -- Get all lemmas which could match some subexpression
-  let candidates := (← lemmas.1.getSubexpressionMatches target discrTreeConfig)
-    ++ (← lemmas.2.getSubexpressionMatches target discrTreeConfig)
+  let candidates := (← getSubexpressionMatches lemmas.1 target discrTreeConfig)
+    ++ (← getSubexpressionMatches lemmas.2 target discrTreeConfig)
 
   -- Sort them by our preferring weighting
   -- (length of discriminant key, doubled for the forward implication)
@@ -341,11 +367,10 @@ def FinRwResult.addSuggestion (ref : Syntax) (r : FinRwResult) : Elab.TermElabM 
     addRewriteSuggestion ref [(r.expr, r.symm)] (type? := r.newGoal) (origSpan? := ← getRef)
 
 def takeListAux (cfg : RewriteResultConfig) (seen : HashMap String Unit) (acc : Array FinRwResult)
-    (xs : List ((Expr ⊕ Name) × Bool × Nat)) : MetaM (Array FinRwResult) :=
-  match xs with
-  | [] =>
-    pure acc
-  | (lem, symm, weight) :: xs => do
+    (xs : List ((Expr ⊕ Name) × Bool × Nat)) : MetaM (Array FinRwResult) := do
+  let mut seen := seen
+  let mut acc := acc
+  for (lem, symm, weight) in xs do
     if (← getRemainingHeartbeats) < cfg.minHeartbeats then
       return acc
     if acc.size ≥ cfg.max then
@@ -354,23 +379,22 @@ def takeListAux (cfg : RewriteResultConfig) (seen : HashMap String Unit) (acc : 
           withoutModifyingState <| withMCtx cfg.mctx do
             rwLemma cfg.mctx cfg.goal cfg.target cfg.side lem symm weight
     match res with
-    | none =>
-      takeListAux cfg seen acc xs
+    | none => continue
     | some r =>
       let s ← withoutModifyingState <| withMCtx r.mctx r.ppResult
       if seen.contains s then
-        takeListAux cfg seen acc xs
-      else
-        let rfl? ← RewriteResult.computeRfl r
-        if true then -- cfg.stopAtRfl
-          if rfl? then
-            pure #[FinRwResult.mkFin r true]
-          else
-            let seen := seen.insert s ()
-            takeListAux cfg seen (acc.push (FinRwResult.mkFin r false)) xs
+        continue
+      let rfl? ← RewriteResult.computeRfl r
+      if cfg.stopAtRfl then
+        if rfl? then
+          return #[FinRwResult.mkFin r true]
         else
-          let seen := seen.insert s ()
-          takeListAux cfg seen (acc.push (FinRwResult.mkFin r  rfl?)) xs
+          seen := seen.insert s ()
+          acc := acc.push (FinRwResult.mkFin r false)
+      else
+        seen := seen.insert s ()
+        acc := acc.push (FinRwResult.mkFin r  rfl?)
+  return acc
 
 /-- Find lemmas which can rewrite the goal. -/
 def findRewrites (hyps : Array (Expr × Bool × Nat))
